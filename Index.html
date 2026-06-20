@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earn Money App</title>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAxNxtYKLQ-0ElmWYN8ZwS8cx3kcHrCR7I",
+  authDomain: "mvl-app-5ce27.firebaseapp.com",
+  projectId: "mvl-app-5ce27",
+  storageBucket: "mvl-app-5ce27.firebasestorage.app",
+  messagingSenderId: "445346082986",
+  appId: "1:445346082986:web:711971cb831214bafea0d3"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+window.auth = auth;
+window.db = db;
+window.firebaseFuncs = { createUserWithEmailAndPassword, signInWithEmailAndPassword, doc, setDoc, getDoc, updateDoc, collection, addDoc, getDocs, query, where, deleteDoc, db };
+
+let currentUser = null;
+const ADMIN_PASS = "admin1202";
+
+let tasks = [
+  {id:1, title:"Watch Video Ad", reward:0.50},
+  {id:2, title:"Complete Survey", reward:0.50},
+  {id:3, title:"Install App", reward:0.50},
+  {id:4, title:"Share Link", reward:0.50},
+  {id:5, title:"Daily Check-in", reward:0.50}
+];
+
+window.showPage = function(pageId, btn=null){
+  document.querySelectorAll('.page').forEach(p=>p.style.display='none');
+  document.getElementById(pageId).style.display='block';
+  if(btn){
+    document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  if(pageId==='homePage' || pageId==='walletPage' || pageId==='tasksPage') updateUI();
+  if(pageId==='adminPage') loadAdminData();
+}
+
+window.signup = async function(){
+  const user = document.getElementById('signupUser').value.trim();
+  const pass = document.getElementById('signupPass').value;
+  const pass2 = document.getElementById('signupPass2').value;
+  const error = document.getElementById('signupError');
+  const successMsg = document.getElementById('signupSuccess');
+  error.textContent = '';
+  successMsg.textContent = '';
+  if(!user ||!pass) return error.textContent = 'Please fill all fields!';
+  if(pass!== pass2) return error.textContent = 'Passwords do not match!';
+  
+  try{
+    const { createUserWithEmailAndPassword, db, doc, setDoc } = window.firebaseFuncs;
+    const email = user + '@mvlapp.com';
+    const userCred = await createUserWithEmailAndPassword(window.auth, email, pass);
+    await setDoc(doc(db, "users", userCred.user.uid), {
+      username: user,
+      balance: 0,
+      completedTasks: [],
+      createdAt: new Date()
+    });
+    successMsg.textContent = 'Account created';
+    setTimeout(()=>{successMsg.textContent=''}, 3000);
+    document.getElementById('signupUser').value = '';
+    document.getElementById('signupPass').value = '';
+    document.getElementById('signupPass2').value = '';
+  }catch(e){
+    if(e.code === 'auth/email-already-in-use') error.textContent = 'Username already exists!';
+    else if(e.code === 'auth/weak-password') error.textContent = 'Password must be at least 6 characters';
+    else if(e.code === 'auth/network-request-failed') error.textContent = 'Network error. Check internet connection!';
+    else error.textContent = 'Error: ' + e.message;
+  }
+}
+
+window.login = async function(){
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const error = document.getElementById('loginError');
+  error.textContent = '';
+  try{
+    const { signInWithEmailAndPassword } = window.firebaseFuncs;
+    const email = user + '@mvlapp.com';
+    const userCred = await signInWithEmailAndPassword(window.auth, email, pass);
+    currentUser = userCred.user.uid;
+    localStorage.setItem('currentUser', currentUser);
+    document.getElementById('bottomNav').style.display = 'flex';
+    showPage('homePage');
+  }catch(e){
+    if(e.code === 'auth/wrong-password' || e.code === 'auth/user-not-found') error.textContent = 'Invalid username or password!';
+    else if(e.code === 'auth/network-request-failed') error.textContent = 'Network error. Check internet connection!';
+    else error.textContent = 'Error: ' + e.message;
+  }
+}
+
+window.logout = function(){
+  currentUser = null;
+  localStorage.removeItem('currentUser');
+  document.getElementById('bottomNav').style.display = 'none';
+  showPage('loginPage');
+}
+
+async function updateUI(){
+  if(!currentUser) return;
+  const { db, doc, getDoc } = window.firebaseFuncs;
+  const snap = await getDoc(doc(db, "users", currentUser));
+  if(snap.exists()){
+    const user = snap.data();
+    document.getElementById('userName').textContent = user.username;
+    document.getElementById('balance').textContent = '$' + user.balance.toFixed(2);
+    document.getElementById('walletBalance').textContent = '$' + user.balance.toFixed(2);
+    document.getElementById('tasksDone').textContent = user.completedTasks.length;
+
+    const tasksList = document.getElementById('tasksList');
+    tasksList.innerHTML = '';
+    tasks.forEach(task=>{
+      const done = user.completedTasks.includes(task.id);
+      tasksList.innerHTML += `<div class="task ${done?'done':''}"><div><div>${task.title}</div><div style="font-size:12px;color:#94a3b8">+$${task.reward.toFixed(2)}</div></div><button onclick="completeTask(${task.id}, ${task.reward})" ${done?'disabled':''}>${done?'Done':'Start'}</button></div>`;
+    });
+  }
+}
+
+window.completeTask = async function(id, reward){
+  if(!currentUser) return;
+  const { db, doc, getDoc, updateDoc } = window.firebaseFuncs;
+  const userRef = doc(db, "users", currentUser);
+  const snap = await getDoc(userRef);
+  const user = snap.data();
+  if(user.completedTasks.includes(id)) return;
+  await updateDoc(userRef, {
+    balance: user.balance + reward,
+    completedTasks: [...user.completedTasks, id]
+  });
+  updateUI();
+}
+
+window.requestWithdraw = async function(){
+  if(!currentUser) return;
+  const amount = parseFloat(document.getElementById('withdrawAmount').value);
+  const phone = document.getElementById('withdrawPhone').value.trim();
+  const error = document.getElementById('withdrawError');
+  const success = document.getElementById('withdrawSuccess');
+  error.textContent = ''; success.textContent = '';
+  if(!amount || amount < 5) return error.textContent = 'Minimum withdrawal is $5.00';
+  if(!phone) return error.textContent = 'Enter EcoCash number!';
+  const { db, collection, addDoc } = window.firebaseFuncs;
+  await addDoc(collection(db, "withdrawals"), {
+    userId: currentUser, amount: amount, phone: phone, status: 'pending', date: new Date()
+  });
+  document.getElementById('withdrawAmount').value = '';
+  document.getElementById('withdrawPhone').value = '';
+  success.textContent = 'Withdrawal request submitted!';
+}
+
+window.requestDeposit = async function(){
+  if(!currentUser) return;
+  const amount = parseFloat(document.getElementById('depositAmount').value);
+  const ref = document.getElementById('depositRef').value.trim();
+  const error = document.getElementById('depositError');
+  const success = document.getElementById('depositSuccess');
+  error.textContent = ''; success.textContent = '';
+  if(!amount || amount < 1) return error.textContent = 'Enter valid amount!';
+  if(!ref) return error.textContent = 'Enter transaction reference!';
+  const { db, collection, addDoc } = window.firebaseFuncs;
+  await addDoc(collection(db, "deposits"), {
+    userId: currentUser, amount: amount, ref: ref, status: 'pending', date: new Date()
+  });
+  document.getElementById('depositAmount').value = '';
+  document.getElementById('depositRef').value = '';
+  success.textContent = 'Deposit request submitted!';
+}
+
+window.adminLogin = function(){
+  const pass = document.getElementById('adminPass').value;
+  const error = document.getElementById('adminError');
+  error.textContent = '';
+  if(pass === ADMIN_PASS){
+    localStorage.setItem('isAdmin', 'true');
+    showPage('adminPage');
+  } else error.textContent = 'Incorrect password!';
+}
+
+window.adminLogout = function(){
+  localStorage.removeItem('isAdmin');
+  showPage('loginPage');
+}
+
+async function loadAdminData(){
+  const { db, collection, getDocs, doc, getDoc, updateDoc, deleteDoc } = window.firebaseFuncs;
+  const usersSnap = await getDocs(collection(db, "users"));
+  document.getElementById('totalUsers').textContent = usersSnap.size;
+  
+  const wSnap = await getDocs(query(collection(db, "withdrawals"), where("status", "==", "pending")));
+  document.getElementById('pendingW').textContent = wSnap.size;
+  const wTable = document.getElementById('withdrawTable');
+  wTable.innerHTML = '';
+  wSnap.forEach(async d=>{
+    const data = d.data();
+    const userSnap = await getDoc(doc(db, "users", data.userId));
+    const username = userSnap.exists() ? userSnap.data().username : 'Unknown';
+    wTable.innerHTML += `<tr><td>${username}</td><td>$${data.amount.toFixed(2)}</td><td><button class="btn-success" onclick="approveWithdraw('${d.id}','${data.userId}',${data.amount})">Approve</button><button class="btn-danger" onclick="rejectWithdraw('${d.id}')">Reject</button></td></tr>`;
+  });
+
+  const dSnap = await getDocs(query(collection(db, "deposits"), where("status", "==", "pending")));
+  document.getElementById('pendingD').textContent = dSnap.size;
+  const dTable = document.getElementById('depositTable');
+  dTable.innerHTML = '';
+  dSnap.forEach(async d=>{
+    const data = d.data();
+    const userSnap = await getDoc(doc(db, "users", data.userId));
+    const username = userSnap.exists() ? userSnap.data().username : 'Unknown';
+    dTable.innerHTML += `<tr><td>${username}</td><td>$${data.amount.toFixed(2)}</td><td>${data.ref}</td><td><button class="btn-success" onclick="approveDeposit('${d.id}','${data.userId}',${data.amount})">Approve</button><button class="btn-danger" onclick="rejectDeposit('${d.id}')">Reject</button></td></tr>`;
+  });
+
+  loadAdminTasks();
+}
+
+window.approveWithdraw = async function(id, userId, amount){
+  const { db, doc, getDoc, updateDoc, deleteDoc } = window.firebaseFuncs;
+  const userRef = doc(db, "users", userId);
+  const snap = await getDoc(userRef);
+  const user = snap.data();
+  await updateDoc(userRef, { balance: user.balance - amount });
+  await deleteDoc(doc(db, "withdrawals", id));
+  alert('Withdraw approved');
+  loadAdminData();
+}
+
+window.rejectWithdraw = async function(id){
+  const { db, doc, deleteDoc } = window.firebaseFuncs;
+  await deleteDoc(doc(db, "withdrawals", id));
+  alert('Withdraw rejected');
+  loadAdminData();
+}
+
+window.approveDeposit = async function(id, userId, amount){
+  const { db, doc, getDoc, updateDoc, deleteDoc } = window.firebaseFuncs;
+  const userRef = doc(db, "users", userId);
+  const snap = await getDoc(userRef);
+  const user = snap.data();
+  await updateDoc(userRef, { balance: user.balance + amount });
+  await deleteDoc(doc(db, "deposits", id));
+  alert('Deposit approved');
+  loadAdminData();
+}
+
+window.rejectDeposit = async function(id){
+  const { db, doc, deleteDoc } = window.firebaseFuncs;
+  await deleteDoc(doc(db, "deposits", id));
+  alert('Deposit rejected');
+  loadAdminData();
+}
+
+function loadAdminTasks(){
+  const list = document.getElementById('adminTasksList');
+  list.innerHTML = '';
+  tasks.forEach(t=>{
+    list.innerHTML += `<div class="task"><div>${t.title} - $${t.reward}</div><button class="btn-danger" onclick="deleteTask(${t.id})">Delete</button></div>`;
+  });
+}
+
+window.addTask = function(){
+  const title = document.getElementById('newTaskTitle').value.trim();
+  const reward = parseFloat(document.getElementById('newTaskReward').value);
+  if(!title || !reward) return alert('Fill title and reward');
+  const newId = tasks.length > 0 ? Math.max(...tasks.map(t=>t.id))+1 : 1;
+  tasks.push({id:newId, title:title, reward:reward});
+  document.getElementById('newTaskTitle').value = '';
+  document.getElementById('newTaskReward').value = '';
+  loadAdminTasks();
+}
+
+window.deleteTask = function(id){
+  tasks = tasks.filter(t=>t.id!==id);
+  loadAdminTasks();
+}
+
+window.onload = function(){
+  document.querySelectorAll('.page').forEach(p=>p.style.display='none');
+  const savedUser = localStorage.getItem('currentUser');
+  const isAdmin = localStorage.getItem('isAdmin');
+  if(isAdmin){ showPage('adminPage'); loadAdminData(); }
+  else if(savedUser){ currentUser = savedUser; document.getElementById('bottomNav').style.display = 'flex'; showPage('homePage'); }
+  else showPage('loginPage');
+}
+</script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
+  body{background:#0f172a;color:#fff;min-height:100vh}
+.container{max-width:420px;margin:auto;padding:20px;padding-bottom:80px}
+.page{display:none}
+  h1{font-size:24px;margin-bottom:20px;text-align:center;color:#38bdf8}
+  input,button{width:100%;padding:14px;margin:8px 0;border-radius:12px;border:none;font-size:16px}
+  input{background:#1e293b;color:#fff;border:1px solid #334155}
+  input:focus{outline:2px solid #38bdf8}
+  button{background:#38bdf8;color:#0f172a;font-weight:bold;cursor:pointer}
+  button:active{transform:scale(.98)}
+.link{text-align:center;margin-top:15px;color:#94a3b8}
+.link span{color:#38bdf8;cursor:pointer}
+.nav{position:fixed;bottom:0;left:0;right:0;background:#1e293b;display:flex;justify-content:space-around;padding:10px;border-top:1px solid #334155}
+.nav-btn{flex:1;text-align:center;padding:8px;cursor:pointer;color:#94a3b8}
+.nav-btn.active{color:#38bdf8}
+.card{background:#1e293b;padding:20px;border-radius:16px;margin:15px 0;border:1px solid #334155}
+.balance{font-size:36px;font-weight:bold;color:#4ade80;text-align:center}
+.task{display:flex;justify-content:space-between;align-items:center;background:#1e293b;padding:15px;border-radius:12px;margin:10px 0;border:1px solid #334155}
+.task button{width:auto;padding:8px 16px;font-size:14px}
+.done{opacity:.5;text-decoration:line-through}
+.logout{position:absolute;top:20px;right:20px;background:#ef4444;color:#fff;padding:8px 12px;border-radius:8px;font-size:14px;width:auto}
+.error{color:#ef4444;font-size:14px;text-align:center;margin-top:10px}
+.success{color:#4ade80;font-size:14px;text-align:center;margin-top:10px}
+table{width:100%;border-collapse:collapse;margin-top:15px;font-size:13px}
+th,td{padding:8px;text-align:left;border-bottom:1px solid #334155}
+th{color:#38bdf8}
+.btn-danger{background:#ef4444;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;width:auto;margin:2px}
+.btn-success{background:#22c55e;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;width:auto;margin:2px}
+.stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:20px}
+.stat-card{background:#1e293b;padding:12px;border-radius:12px;text-align:center;border:1px solid #334155}
+.stat-num{font-size:20px;font-weight:bold;color:#4ade80}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div id="loginPage" class="page">
+  <h1>Login</h1>
+  <input type="text" id="loginUser" placeholder="Username">
+  <input type="password" id="loginPass" placeholder="Password">
+  <button onclick="login()">Login</button>
+  <div class="error" id="loginError"></div>
+  <div class="link">Don't have an account? <span onclick="showPage('signupPage')">Sign Up</span></div>
+  <div class="link" style="margin-top:30px">Admin? <span onclick="showPage('adminLoginPage')">Admin Panel</span></div>
+</div>
+
+<div id="signupPage" class="page">
+  <h1>Sign Up</h1>
+  <input type="text" id="signupUser" placeholder="Username">
+  <input type="password" id="signupPass" placeholder="Password">
+  <input type="password" id="signupPass2" placeholder="Confirm Password">
+  <button onclick="signup()">Create Account</button>
+  <div class="error" id="signupError"></div>
+  <div class="success" id="signupSuccess"></div>
+  <div class="link">Already have an account? <span onclick="showPage('loginPage')">Login</span></div>
+</div>
+
+<div id="adminLoginPage" class="page">
+  <h1>Admin Login</h1>
+  <input type="password" id="adminPass" placeholder="Admin Password">
+  <button onclick="adminLogin()">Enter Panel</button>
+  <div class="error" id="adminError"></div>
+  <div class="link"><span onclick="showPage('loginPage')">← Back</span></div>
+</div>
+
+<div id="adminPage" class="page">
+  <button class="logout" onclick="adminLogout()">Logout</button>
+  <h1>Admin Panel</h1>
+  <div class="stats">
+    <div class="stat-card"><div style="color:#94a3b8;font-size:11px">Users</div><div class="stat-num" id="totalUsers">0</div></div>
+    <div class="stat-card"><div style="color:#94a3b8;font-size:11px">Pending W</div><div class="stat-num" id="pendingW">0</div></div>
+    <div class="stat-card"><div style="color:#94a3b8;font-size:11px">Pending D</div><div class="stat-num" id="pendingD">0</div></div>
+  </div>
+  <div class="card"><h3>Manage Tasks</h3><input type="text" id="newTaskTitle" placeholder="Task title"><input type="number" step="0.01" id="newTaskReward" placeholder="Reward $"><button onclick="addTask()">Add Task</button><div id="adminTasksList"></div></div>
+  <div class="card"><h3>Pending Withdrawals</h3><table><thead><tr><th>User</th><th>Amount</th><th>Action</th></tr></thead><tbody id="withdrawTable"></tbody></table></div>
+  <div class="card"><h3>Pending Deposits</h3><table><thead><tr><th>User</th><th>Amount</th><th>Ref</th><th>Action</th></tr></thead><tbody id="depositTable"></tbody></table></div>
+</div>
+
+<div id="homePage" class="page">
+  <button class="logout" onclick="logout()">Logout</button>
+  <h1>Dashboard</h1>
+  <div class="card"><p>Welcome, <span id="userName"></span>!</p><p style="margin-top:10px;color:#94a3b8">Balance</p><div class="balance" id="balance">$0.00</div></div>
+  <div class="card"><h3>Quick Stats</h3><p>Tasks Completed: <span id="tasksDone">0</span>/5</p><p>Status: Active ✅</p></div>
+</div>
+
+<div id="walletPage" class="page">
+  <h1>Wallet</h1>
+  <div class="card"><p style="color:#94a3b8">Available Balance</p><div class="balance" id="walletBalance">$0.00</div></div>
+  <div class="card"><h3>Withdraw</h3><input type="number" id="withdrawAmount" placeholder="Enter amount $"><input type="text" id="withdrawPhone" placeholder="EcoCash: 077xxxxxxx"><button onclick="requestWithdraw()">Request Withdraw</button><div class="error" id="withdrawError"></div><div class="success" id="withdrawSuccess"></div><p style="font-size:12px;color:#94a3b8;margin-top:10px">Min: $5.00</p></div>
+  <div class="card"><h3>Deposit</h3><input type="number" id="depositAmount" placeholder="Amount sent $"><input type="text" id="depositRef" placeholder="Transaction Ref"><button onclick="requestDeposit()">I Sent Money</button><div class="error" id="depositError"></div><div class="success" id="depositSuccess"></div><p style="font-size:12px;color:#94a3b8;margin-top:10px">Send to: 0776390116</p></div>
+</div>
+
+<div id="tasksPage" class="page">
+  <h1>Tasks</h1>
+  <div id="tasksList"></div>
+</div>
+
+</div>
+
+<div class="nav" id="bottomNav" style="display:none">
+  <div class="nav-btn active" onclick="showPage('homePage', this)">Home</div>
+  <div class="nav-btn" onclick="showPage('tasksPage', this)">Tasks</div>
+  <div class="nav-btn" onclick="showPage('walletPage', this)">Wallet</div>
+</div>
+
+</body>
+</html>
